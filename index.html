@@ -92,7 +92,7 @@
 
   #control-deck{
     position:relative;flex:0 0 25%;height:25%;min-height:0;
-    display:flex;align-items:center;justify-content:space-between;gap:clamp(6px,2vw,12px);
+    display:flex;align-items:flex-end;justify-content:space-between;gap:clamp(6px,2vw,12px);
     padding:8px max(10px,env(safe-area-inset-right,10px))
             max(8px,env(safe-area-inset-bottom,8px))
             max(10px,env(safe-area-inset-left,10px));
@@ -102,7 +102,9 @@
   .deck-side{display:flex;align-items:center;gap:clamp(6px,1.8vw,10px);flex:1 1 0;min-width:0}
   .deck-side.l{justify-content:flex-start}
   .deck-side.r{justify-content:flex-end}
-  .deck-mid{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;flex:0 0 auto}
+  /* ミュートは操作列から外し、操作盤の上段中央へ置く（列に並べると幅が足りず重なる） */
+  .deck-mid{position:absolute;left:50%;top:8px;transform:translateX(-50%);
+            display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px}
   .deck-label{font-size:8px;letter-spacing:.34em;color:var(--kasumi);white-space:nowrap}
   .grp{display:flex;gap:clamp(6px,1.8vw,10px);align-items:center}
   button.k{appearance:none;border:1px solid rgba(237,230,216,.22);background:rgba(22,19,32,.82);color:var(--washi);
@@ -114,10 +116,10 @@
               letter-spacing:.14em;color:var(--kasumi)}
   button.k:active,button.k.down{transform:scale(.92) translateY(2px);opacity:.9}
   button.k:focus-visible{outline:2px solid var(--kin);outline-offset:2px}
-  .mv{width:min(17vw,72px);height:min(15vw,64px);font-size:clamp(14px,4vw,17px)}
+  .mv{width:min(16vw,72px);height:min(15vw,64px);font-size:clamp(14px,4vw,17px)}
   .mv:active,.mv.down{background:rgba(237,230,216,.16)}
-  .at{width:min(18vw,76px);height:min(18vw,76px);font-size:clamp(16px,4.6vw,20px)}
-  #bA{width:min(21vw,84px);height:min(21vw,84px);font-size:clamp(18px,5vw,22px)}
+  .at{width:min(16.5vw,76px);height:min(16.5vw,76px);font-size:clamp(16px,4.6vw,20px)}
+  #bA{width:min(19.5vw,84px);height:min(19.5vw,84px);font-size:clamp(18px,5vw,22px)}
   #bA{border-color:rgba(201,162,39,.5);background:rgba(201,162,39,.12)}
   #bA:active,#bA.down{background:rgba(201,162,39,.34);border-color:var(--kin)}
   #bG{border-color:rgba(91,134,184,.5);background:rgba(91,134,184,.12)}
@@ -267,6 +269,15 @@
   </div>
 </div>
 
+<!-- preload="none": 起動時に本体を取りに行くとネットワークが空かず、
+     ページ読み込み完了（networkidle）を待つ側が止まる。最初のタップで読み始める。
+     m4a(HE-AAC 64k/1.4MB)が本命。mp3(192k/4.1MB)はHE-AAC非対応ブラウザ用の保険で、
+     対応ブラウザは m4a だけを取得して mp3 は1バイトも落とさない -->
+<audio id="bgm" loop preload="none" playsinline>
+  <source src="Steel_in_the_Grass.m4a" type="audio/mp4; codecs=&quot;mp4a.40.5&quot;">
+  <source src="Steel_in_the_Grass.mp3" type="audio/mpeg">
+</audio>
+
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script>
 (function(){
@@ -287,7 +298,10 @@ document.addEventListener('touchmove',function(e){
   e.preventDefault();
 },{passive:false});
 document.addEventListener('visibilitychange',function(){
-  if(document.visibilityState==='visible'&&sndOn&&ac()&&AC&&AC.state==='suspended')AC.resume();
+  if(document.visibilityState==='visible'){
+    if(sndOn&&ac()&&AC&&AC.state==='suspended')AC.resume();
+    if(sndOn&&typeof bgmStart==='function')bgmStart();
+  }else if(typeof bgmStop==='function')bgmStop();
 });
 
 /* ══ 音 ══ */
@@ -297,6 +311,7 @@ function ac(){if(!AC){try{AC=new (window.AudioContext||window.webkitAudioContext
 function unlockAudio(){
   if(!sndOn)return;
   var a=ac(); if(a&&a.state==='suspended')a.resume();
+  bgmStart();
 }
 document.addEventListener('pointerdown',unlockAudio,{once:true});
 document.addEventListener('keydown',unlockAudio,{once:true});
@@ -333,6 +348,45 @@ var SFX={
   gasp:function(){tone(420,180,.35,'sine',.09);noise(.3,.08,800)},
   step:function(){noise(.05,.04,520)}
 };
+/* ══ BGM ══
+   4.3MBのMP3は decodeAudioData に載せるとiPhoneで数十MBに展開される。
+   <audio> のまま流し、音量だけ WebAudio の gain を通して握る
+   （iOS Safari は media要素の .volume 代入を無視するため、gain が唯一の手段） */
+var BGM_VOL=.38, bgmEl=null, bgmSrc=null, bgmGain=null, bgmOffT=0;
+function bgmInit(){
+  if(!bgmEl){ bgmEl=$('#bgm'); if(!bgmEl)return false; bgmEl.loop=true; }
+  if(!bgmGain){
+    var a=ac();
+    if(a&&a.createMediaElementSource){
+      try{
+        bgmSrc=a.createMediaElementSource(bgmEl);
+        bgmGain=a.createGain(); bgmGain.gain.value=0;
+        bgmSrc.connect(bgmGain); bgmGain.connect(a.destination);
+      }catch(e){ bgmSrc=null; bgmGain=null; }   /* 経路を作れなくても再生自体は続ける */
+    }
+  }
+  return true;
+}
+function bgmFade(to,sec){
+  if(!bgmGain){ if(bgmEl)try{bgmEl.volume=to;}catch(e){} return; }
+  var a=ac(); if(!a)return;
+  var t=a.currentTime, g=bgmGain.gain;
+  g.cancelScheduledValues(t); g.setValueAtTime(g.value,t); g.linearRampToValueAtTime(to,t+sec);
+}
+function bgmStart(){                     /* 必ずユーザー操作の中から呼ぶ（iOSの自動再生制限） */
+  if(!sndOn||!bgmInit())return;
+  clearTimeout(bgmOffT);
+  var pr=bgmEl.play();
+  if(pr&&pr.catch)pr.catch(function(){});  /* 拒否されても次のタップで鳴る。例外は投げない */
+  bgmFade(BGM_VOL,1.4);
+}
+function bgmStop(){
+  if(!bgmEl)return;
+  bgmFade(0,.32);
+  clearTimeout(bgmOffT);
+  bgmOffT=setTimeout(function(){ if(bgmEl&&(!sndOn||document.visibilityState!=='visible'))bgmEl.pause(); },360);
+}
+
 (function(){
   var sndBtn=$('#snd');
   if(!sndBtn)return;
@@ -346,7 +400,10 @@ var SFX={
     sndOn=!sndOn;
     try{localStorage.setItem(MUTE_KEY,sndOn?'0':'1');}catch(e){}
     syncMuteBtn();
-    if(sndOn)SFX.step();
+    if(sndOn){
+      var a2=ac(); if(a2&&a2.state==='suspended')a2.resume();
+      SFX.step(); bgmStart();
+    }else bgmStop();
     sndBtn.classList.remove('down');
   });
   sndBtn.addEventListener('pointercancel',function(){sndBtn.classList.remove('down');});
@@ -453,7 +510,44 @@ function samurai(main,accent){
   var hair=new THREE.Mesh(new THREE.SphereGeometry(.19,12,10,0,6.3,0,1.5),dark); hair.position.y=1.84; body.add(hair);
   var mage=new THREE.Mesh(new THREE.CylinderGeometry(.045,.055,.22,6),dark);
   mage.position.set(0,1.93,-.1); mage.rotation.x=-.6; body.add(mage);
-  var men=new THREE.Mesh(new THREE.BoxGeometry(.2,.075,.06),acc); men.position.set(0,1.78,.16); body.add(men);
+  /* ── 顔 ──
+     局所座標は頭の中心。+z が正面（相手の方）で、カメラからは常に横顔で見える。
+     そのため鼻筋・眉・顎当ての「輪郭」で読ませ、目は基本材で暗所でも光らせる */
+  var eyeW=new THREE.MeshBasicMaterial({color:0xefe7d6});
+  var eyeD=new THREE.MeshStandardMaterial({color:0x120d16,roughness:.35,
+    emissive:accent,emissiveIntensity:.30});
+  var lipM=new THREE.MeshStandardMaterial({color:0x3d2027,roughness:.9});
+  function onFace(w,h,d,mat,yaw,pitch,r,roll){
+    var m=new THREE.Mesh(new THREE.BoxGeometry(w,h,d),mat),cp=Math.cos(pitch);
+    m.position.set(Math.sin(yaw)*cp*r,Math.sin(pitch)*r,Math.cos(yaw)*cp*r);
+    m.lookAt(m.position.x*3,m.position.y*3,m.position.z*3);
+    if(roll)m.rotateZ(roll);
+    head.add(m); return m;
+  }
+  onFace(.092,.026,.035,dark,   .38, .095,.172,-.34);  /* 眉（吊り上げる） */
+  onFace(.092,.026,.035,dark,  -.38, .095,.172, .34);
+  onFace(.060,.030,.035,eyeW,   .38,-.020,.170,-.12);  /* 白目 */
+  onFace(.060,.030,.035,eyeW,  -.38,-.020,.170, .12);
+  onFace(.028,.028,.030,eyeD,   .40,-.025,.184, 0);    /* 瞳（眼光） */
+  onFace(.028,.028,.030,eyeD,  -.40,-.025,.184, 0);
+  onFace(.072,.018,.030,lipM,  0,   -.50, .172, 0);    /* 口 */
+  var nose=new THREE.Mesh(new THREE.ConeGeometry(.050,.140,4),skin);
+  nose.rotation.x=Math.PI/2; nose.rotation.z=Math.PI/4;
+  nose.position.set(0,-.045,.150); head.add(nose);
+
+  /* 顎当て（旧・面）。口の下へ落として輪郭を締める */
+  var men=new THREE.Mesh(new THREE.BoxGeometry(.158,.062,.052),acc);
+  men.position.set(0,1.694,.098); men.rotation.x=.58; body.add(men);
+
+  /* 鉢巻（色で敵味方を一目で分ける。結び目と垂れは揺らす） */
+  var band=new THREE.Mesh(new THREE.CylinderGeometry(.193,.196,.058,14,1,true),acc);
+  band.position.y=1.902; body.add(band);
+  var hachi=new THREE.Group(); hachi.position.set(0,1.898,-.182); body.add(hachi);
+  var knot=new THREE.Mesh(new THREE.BoxGeometry(.078,.078,.07),acc); hachi.add(knot);
+  var tail=new THREE.Mesh(new THREE.BoxGeometry(.030,.27,.014),acc);
+  tail.position.set(.05,-.15,-.05); tail.rotation.x=-.30; tail.rotation.z=.16; hachi.add(tail);
+  var tail2=tail.clone(); tail2.position.set(-.055,-.17,-.045);
+  tail2.rotation.z=-.20; hachi.add(tail2);
 
   var armR=new THREE.Group(); armR.position.set(-.36,1.44,.02); body.add(armR);
   var upR=new THREE.Mesh(new THREE.CylinderGeometry(.075,.065,.62,6),cloth);
@@ -497,9 +591,113 @@ function samurai(main,accent){
   aura.visible=false; scene.add(aura);
 
   scene.add(G);
-  return {root:G,body:body,armR:armR,armL:armL,sword:sword,saya:saya,arc:arc,guardFx:gd,aura:aura,head:head};
+  return {root:G,body:body,armR:armR,armL:armL,sword:sword,saya:saya,arc:arc,guardFx:gd,aura:aura,head:head,hachi:hachi};
 }
 var P=samurai(0x7d2029,SHU), E=samurai(0x1f3552,0x5b86b8);
+
+/* ══ 応援者 ══
+   輪（半径5.28）の外、奥側の弧に5人。全員が中央を向く。
+   影は落とさない（描画コストを増やさないため）。歓声の高ぶりは hype で共有する */
+var hype=0, crowd=[];
+var CG={
+  head:new THREE.SphereGeometry(.145,8,6),
+  hair:new THREE.SphereGeometry(.152,8,6,0,6.3,0,1.65),
+  torso:new THREE.BoxGeometry(.44,.48,.27),
+  arm:new THREE.CylinderGeometry(.056,.05,.44,5),
+  kneel:new THREE.ConeGeometry(.38,.56,8),
+  leg:new THREE.CylinderGeometry(.14,.22,.76,6)
+};
+var CM={
+  hair:new THREE.MeshStandardMaterial({color:0x17131c,roughness:1}),
+  skin:new THREE.MeshStandardMaterial({color:0xb99274,roughness:.9}),
+  pole:new THREE.MeshStandardMaterial({color:0x2c2430,roughness:1}),
+  lampP:new THREE.MeshBasicMaterial({color:0xffbb68}),
+  lampR:new THREE.MeshBasicMaterial({color:0xd8452f}),
+  fan:new THREE.MeshBasicMaterial({color:KIN,side:THREE.DoubleSide})
+};
+function bannerTex(){
+  var c=document.createElement('canvas'); c.width=64; c.height=160;
+  var x=c.getContext('2d');
+  x.fillStyle='#8e2320'; x.fillRect(0,0,64,160);
+  x.fillStyle='#e6d9b8'; x.fillRect(5,5,54,150);
+  x.fillStyle='#8e2320'; x.textAlign='center';
+  x.font='bold 40px serif'; x.fillText('\u4e00',32,58); x.fillText('\u9583',32,110);
+  var t=new THREE.CanvasTexture(c); t.needsUpdate=true; return t;
+}
+var BANNER_TEX=null;
+
+function supporter(o){
+  var g=new THREE.Group();
+  g.position.set(o.x,0,o.z); g.rotation.y=Math.atan2(-o.x,-o.z);
+  var cloth=new THREE.MeshStandardMaterial({color:o.col,roughness:.95});
+  var hy,base;
+  if(o.kneel){ base=new THREE.Mesh(CG.kneel,cloth); base.position.y=.28; hy=1.00; }
+  else       { base=new THREE.Mesh(CG.leg,cloth);   base.position.y=.38; hy=1.34; }
+  g.add(base);
+  var torso=new THREE.Mesh(CG.torso,cloth); torso.position.y=hy-.42; g.add(torso);
+  var obi=new THREE.Mesh(new THREE.BoxGeometry(.46,.10,.29),
+    new THREE.MeshStandardMaterial({color:o.obi,roughness:.8}));
+  obi.position.y=hy-.62; g.add(obi);
+  var hd=new THREE.Mesh(CG.head,CM.skin); hd.position.y=hy; g.add(hd);
+  var hr=new THREE.Mesh(CG.hair,CM.hair); hr.position.y=hy+.012; g.add(hr);
+
+  var aL=new THREE.Group(); aL.position.set(.26,hy-.24,0); g.add(aL);
+  aL.add(new THREE.Mesh(CG.arm,cloth).translateY(-.22));
+  var aR=new THREE.Group(); aR.position.set(-.26,hy-.24,0); g.add(aR);
+  aR.add(new THREE.Mesh(CG.arm,cloth).translateY(-.22));
+
+  var sway=null;
+  if(o.prop==='lantern'){
+    /* 置き提灯。膝をついた人の脇に立てる（手に持たせると低くて見えない） */
+    var lp=new THREE.Mesh(new THREE.CylinderGeometry(.018,.018,.56,4),CM.pole);
+    lp.position.set(.48,.28,.10); g.add(lp);
+    var lan=new THREE.Mesh(new THREE.CylinderGeometry(.115,.115,.27,10),CM.lampP);
+    lan.position.set(.48,.66,.10); g.add(lan);
+    var lr=new THREE.Mesh(new THREE.CylinderGeometry(.12,.12,.055,10),CM.lampR);
+    lr.position.set(.48,.66,.10); g.add(lr);
+  }else if(o.prop==='fan'){
+    var fan=new THREE.Mesh(new THREE.CircleGeometry(.19,10,0,2.3),CM.fan);
+    fan.position.y=-.46; fan.rotation.z=.35; aR.add(fan);
+  }else if(o.prop==='banner'){
+    if(!BANNER_TEX)BANNER_TEX=bannerTex();
+    sway=new THREE.Group(); sway.position.set(-.30,0,0); g.add(sway);
+    var pole=new THREE.Mesh(new THREE.CylinderGeometry(.030,.030,2.3,6),CM.pole);
+    pole.position.y=1.15; sway.add(pole);
+    var bn=new THREE.Mesh(new THREE.PlaneGeometry(.50,1.25),
+      new THREE.MeshBasicMaterial({map:BANNER_TEX,side:THREE.DoubleSide}));
+    bn.position.set(-.26,1.58,.03); sway.add(bn);
+    aR.rotation.x=-1.05;
+  }
+  scene.add(g);
+  crowd.push({g:g,aL:aL,aR:aR,sway:sway,kneel:!!o.kneel,ph:Math.random()*6.28,
+              amp:o.amp||1});
+}
+/* 縦持ちの画角は横に狭い。半径7.4の弧のうち、奥側だけに5人を収める */
+[{x:-4.4,z:-5.9,kneel:false,col:0x4a2a2f,obi:0xc9a227,prop:'fan'    ,amp:1.1},
+ {x:-2.4,z:-7.0,kneel:false,col:0x2b3a4a,obi:0xd8452f,prop:'banner' ,amp:.8},
+ {x: 0.3,z:-7.4,kneel:true ,col:0x3c2f46,obi:0x6e5a3a,prop:'lantern',amp:.5},
+ {x: 2.6,z:-6.9,kneel:false,col:0x3a4a2e,obi:0xede6d8,prop:'fan'    ,amp:1.2},
+ {x: 4.5,z:-5.9,kneel:true ,col:0x46303c,obi:0xc9a227,prop:'lantern',amp:.6}
+].forEach(supporter);
+
+function crowdTick(t,raw){
+  hype=Math.max(0,hype-raw*.45);
+  for(var i=0;i<crowd.length;i++){
+    var s=crowd[i], beat=Math.sin(t*(2.3+hype*3.2)+s.ph), up=Math.max(0,beat);
+    var ex=(.28+hype*.72)*s.amp;
+    if(s.kneel){
+      s.g.rotation.x=beat*.055*ex;
+      s.aL.rotation.x=-.18-up*1.5*ex;
+      s.aR.rotation.x=-.18-up*1.5*ex;
+    }else{
+      s.g.position.y=up*.10*ex;
+      s.aL.rotation.x=-.35-(.6+up*.9)*2.0*ex;
+      if(!s.sway)s.aR.rotation.x=-.35-(.6+up*.9)*2.0*ex;
+      s.g.rotation.z=beat*.04*ex;
+    }
+    if(s.sway)s.sway.rotation.z=Math.sin(t*1.1+s.ph)*.05+beat*.03*ex;
+  }
+}
 
 var sparks=[];
 for(var s=0;s<30;s++){
@@ -583,6 +781,7 @@ function kill(playerWins){
   var mid=(p.x+e.x)/2; burst(mid,1.5,20,playerWins?0xc8362b:0x5b86b8);
   spark.position.set(mid,1.6,0); spark.intensity=9;
   var loser=playerWins?e:p; loser.state='fall'; loser.t=0; loser.vx=0;
+  hype=1;
   if(playerWins){st.pw++; call('一　閃','#c8362b','勝');}
   else{st.ew++; call('討たれた','#5b86b8','敗');}
   stars();
@@ -818,6 +1017,11 @@ function pose(V,f,dt){
   V.armR.rotation.z=lerp(V.armR.rotation.z,armA,Math.min(1,dt*(f.state==='act'?40:16)));
   V.armL.rotation.z=lerp(V.armL.rotation.z,-armB,kk);
   V.sword.rotation.z=-1.2;
+  if(V.hachi){
+    var hw=Math.sin(performance.now()*.0042+(f.dir>0?0:2.1))*.16-.18;
+    if(f.state==='act')hw+=.85; else if(f.state==='wind')hw-=.30;
+    V.hachi.rotation.x=lerp(V.hachi.rotation.x,hw,Math.min(1,dt*9));
+  }
 }
 
 /* 気配（構えの読み） */
@@ -931,6 +1135,7 @@ function frame(now){
   }
   spark.intensity*=Math.pow(.02,raw);
   for(var q=0;q<mist.length;q++){ mist[q].position.x=Math.sin(now*.00013+q)*3.2; mist[q].lookAt(cam.position); }
+  crowdTick(now*.001,raw);
 
   for(var ez=0;ez<EN;ez++){
     epos[ez*3+1]+=evel[ez]*raw;
