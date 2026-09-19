@@ -78,3 +78,10 @@
 
 - 本体は `iai-samurai.html` のまま（この作業では `index.html` 化していない）
 - リポジトリ横断の参照は `237-day061` ゼロ件だったので、置換対象はフォルダ名のみ
+
+## 2026-09-19 旧エントリURLの404を修復
+- 症状: `https://titan11111.github.io/237-iai-samurai/iai-samurai.html` が **404**。本体（`/237-iai-samurai/`）は 200 で生きていた
+- 原因: エントリを `iai-samurai.html` → `index.html` へ改名したため、**改名前に配ったリンクだけが死んだ**
+- 対処: `iai-samurai.html` を index.html へのリダイレクト専用ページとして復活（meta refresh ＋ `location.replace()`。`?query`・`#hash` も引き継ぐ）
+- 検出元: `_tools/check-legacy-entry.sh`（245の同種事故を機に新設）。本番URLへcurlを撃って検出
+- 鉄則8: エントリ名を変えたら旧名をリダイレクトで必ず残す（本体URLが200のままなので気づけない）
